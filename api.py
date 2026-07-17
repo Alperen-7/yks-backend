@@ -2,10 +2,11 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import json
 
 app = FastAPI()
 
-# Vercel'deki Next.js sitemizin bu sunucuyla sorunsuz konuşabilmesi için CORS ayarları
+# CORS Ayarları
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,12 +15,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# DİKKAT: Aşağıdaki tırnak içine Supabase'den aldığın ve şifreni yazdığın bağlantı linkini yapıştır!
-# ÖRNEK: "postgresql://postgres:SeninSifren123@db.abcde.supabase.co:5432/postgres"
+# Supabase Veritabanı URL'si
 DATABASE_URL = "postgresql://postgres.lqwbxtmghdvgalncxzmi:muhtemelyenibolum.@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
 
 def get_db_connection():
-    # Supabase (PostgreSQL) veritabanına bağlanır
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 def init_db():
@@ -27,7 +26,7 @@ def init_db():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # PostgreSQL'de otomatik artan ID için AUTOINCREMENT yerine SERIAL kullanılır
+        # 1. Tablo: Öğrenci Kayıtları
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS students (
                 id SERIAL PRIMARY KEY,
@@ -37,27 +36,46 @@ def init_db():
                 kayit_tarihi TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
+        # 2. Tablo: YKS Çalışma, Soru ve Deneme Kayıtları (YENİ)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS study_records (
+                id SERIAL PRIMARY KEY,
+                date TEXT,
+                category TEXT,
+                lesson TEXT,
+                topic TEXT,
+                study_type TEXT,
+                description TEXT,
+                stats JSONB,
+                exam_type TEXT,
+                quiz_questions JSONB,
+                user_answers JSONB,
+                quiz_score INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
         conn.commit()
         cursor.close()
         conn.close()
-        print("✅ Bulut Veritabanı (Supabase) tabloları başarıyla oluşturuldu/kontrol edildi!")
+        print("✅ Bulut Veritabanı (Supabase) tabloları başarıyla hazırlandı!")
     except Exception as e:
         print(f"❌ Veritabanına bağlanırken hata: {e}")
 
-# Sunucu başlarken tablonun var olup olmadığını kontrol et
+# Sunucu başlarken tabloları kontrol et
 init_db()
 
-# ==========================================
-# ENDPOINT'LER (API ÇIKIŞ KAPILARI)
-# ==========================================
 
+# ==========================================
+# 1. ÖĞRENCİ KAYIT API'Sİ (Senin yazdığın)
+# ==========================================
 @app.post("/register-student/")
 async def register_student(request: Request):
     data = await request.json()
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # PostgreSQL'de dışarıdan gelen veriler için "?" yerine "%s" kullanılır
     cursor.execute('''
         INSERT INTO students (ad_soyad, hedef_bolum, hedef_universite)
         VALUES (%s, %s, %s)
@@ -70,5 +88,64 @@ async def register_student(request: Request):
     conn.commit()
     cursor.close()
     conn.close()
+    return {"status": "success", "message": "Öğrenci başarıyla kaydedildi!"}
+
+
+# ==========================================
+# 2. YKS TAKİP: YENİ ÇALIŞMA/DENEME KAYDETME API'Sİ
+# ==========================================
+@app.post("/save-record/")
+async def save_record(request: Request):
+    data = await request.json()
+    conn = get_db_connection()
+    cursor = conn.cursor()
     
-    return {"status": "success", "message": "Öğrenci buluta başarıyla kaydedildi!"}
+    cursor.execute('''
+        INSERT INTO study_records (
+            date, category, lesson, topic, study_type, description, 
+            stats, exam_type, quiz_questions, user_answers, quiz_score
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ''', (
+        data.get('date'),
+        data.get('category'),
+        data.get('lesson'),
+        data.get('topic'),
+        data.get('studyType'),
+        data.get('description'),
+        json.dumps(data.get('stats')) if data.get('stats') else None,
+        data.get('examType'),
+        json.dumps(data.get('quizQuestions')) if data.get('quizQuestions') else None,
+        json.dumps(data.get('userAnswers')) if data.get('userAnswers') else None,
+        data.get('quizScore', 0)
+    ))
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
+    
+    return {"status": "success", "message": "Çalışma Supabase'e kaydedildi!"}
+
+
+# ==========================================
+# 3. YKS TAKİP: YÖNETİCİ PANELİ İÇİN KAYITLARI ÇEKME API'Sİ
+# ==========================================
+@app.get("/get-records/")
+async def get_records():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM study_records ORDER BY date ASC")
+    records = cursor.fetchall()
+    cursor.close()
+    conn.close()
+    
+    return {"status": "success", "data": records}
+
+
+# ==========================================
+# 4. YKS TAKİP: ÖSYM SORULARI (Şimdilik boş dönecek)
+# ==========================================
+@app.get("/get-questions/")
+async def get_questions(category: str = None, lesson: str = None, topic: str = None, limit: int = 1):
+    # İleride veritabanına soru eklersen buradan çekeceksin. 
+    # Şimdilik boş liste döner, frontend hata vermeden kaydı tamamlar.
+    return {"status": "success", "data": []}
